@@ -1,0 +1,20 @@
+# Cloudflare Worker config for the LifeLedger bank sync server.
+# Setup steps: see ../SETUP-BANK-SYNC.md
+name = "lifeledger-sync"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+[vars]
+PLAID_ENV = "sandbox"            # change to "production" once sandbox works
+ALLOWED_ORIGINS = "https://vivivichu.github.io"
+# PLAID_REDIRECT_URI = "https://vivivichu.github.io/App-Dev/"   # only if a bank asks for OAuth redirect
+
+# Created with: npx wrangler kv namespace create ITEMS  — paste the id it prints here.
+[[kv_namespaces]]
+binding = "ITEMS"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+
+# Secrets (never put these in this file):
+#   npx wrangler secret put PLAID_CLIENT_ID
+#   npx wrangler secret put PLAID_SECRET
+#   npx wrangler secret put APP_PASSCODE

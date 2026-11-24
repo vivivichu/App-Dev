@@ -27,6 +27,7 @@
   <main>
     <!-- DASHBOARD -->
     <section id="view-dashboard" class="view active">
+      <div id="dash-warn"></div>
       <div class="stats" id="dash-stats"></div>
       <div class="grid">
         <div class="card wide" id="dash-bills-card">
@@ -66,12 +67,60 @@
             <option value="income">Income</option>
           </select>
           <input name="amount" type="number" step="0.01" min="0.01" placeholder="Amount" required />
+          <select name="currency" aria-label="Currency"></select>
           <input name="category" list="category-list" placeholder="Category" required />
           <input name="date" type="date" required />
           <input name="note" placeholder="Note (optional)" />
           <button type="submit" class="primary">Add</button>
         </form>
         <datalist id="category-list"></datalist>
+      </div>
+
+      <div class="card" id="bank-card">
+        <div class="card-head">
+          <h2>Bank accounts</h2>
+          <div class="form-row" style="margin:0">
+            <button id="bank-sync" class="small">Sync now</button>
+            <button id="bank-connect" class="small primary">Connect a bank</button>
+          </div>
+        </div>
+        <p class="muted hint" id="bank-status"></p>
+        <ul class="list" id="bank-accounts"></ul>
+      </div>
+
+      <div class="card" id="import-card">
+        <h2>Import bank statement <small class="muted">CSV</small></h2>
+        <p class="muted hint">Download your statement from your bank's website or app as CSV (for Excel/XLS files, open them and save as CSV), then choose it here. Transactions you've already imported are skipped.</p>
+        <label class="button">Choose CSV file<input type="file" id="csv-file" accept=".csv,text/csv,text/plain" hidden /></label>
+        <form id="csv-map" hidden>
+          <div class="map-grid">
+            <label>Date column <select name="date"></select></label>
+            <label>Date format <select name="dateFmt">
+              <option value="dmy">Day/Month/Year (31/12/2026)</option>
+              <option value="mdy">Month/Day/Year (12/31/2026)</option>
+              <option value="ymd">Year-Month-Day (2026-12-31)</option>
+            </select></label>
+            <label>Description column <select name="desc"></select></label>
+            <label>Amounts are in <select name="amountMode">
+              <option value="split">Separate withdrawal &amp; deposit columns</option>
+              <option value="signed">One column (negative = money out)</option>
+              <option value="signed-inv">One column (positive = money out)</option>
+              <option value="drcr">One column + a Dr/Cr column</option>
+            </select></label>
+            <label data-mode="split">Withdrawal / debit column <select name="debit"></select></label>
+            <label data-mode="split">Deposit / credit column <select name="credit"></select></label>
+            <label data-mode="signed signed-inv drcr">Amount column <select name="amount"></select></label>
+            <label data-mode="drcr">Dr/Cr column <select name="drcr"></select></label>
+            <label>Currency <select name="currency"></select></label>
+            <label>Account name <input name="account" placeholder="e.g. HDFC Savings" /></label>
+          </div>
+          <p class="muted hint" id="csv-summary"></p>
+          <div class="table-wrap"><table class="table" id="csv-preview"></table></div>
+          <div class="form-row">
+            <button type="submit" class="primary">Import</button>
+            <button type="button" id="csv-cancel">Cancel</button>
+          </div>
+        </form>
       </div>
 
       <div class="card">
@@ -111,6 +160,7 @@
           <h2>Transactions</h2>
           <input type="month" id="tx-month" aria-label="Month" />
         </div>
+        <div id="money-warn"></div>
         <div class="stats small" id="month-stats"></div>
         <table class="table">
           <thead><tr><th>Date</th><th>Category</th><th class="note-h">Note</th><th class="num">Amount</th><th></th></tr></thead>
@@ -201,13 +251,19 @@
     <section id="view-settings" class="view">
       <div class="card">
         <h2>Preferences</h2>
-        <label class="inline">Currency
-          <select id="currency">
-            <option>USD</option><option>EUR</option><option>GBP</option><option>INR</option>
-            <option>JPY</option><option>CAD</option><option>AUD</option><option>SGD</option>
-            <option>AED</option><option>CHF</option><option>CNY</option><option>BRL</option>
-          </select>
-        </label>
+        <label class="inline">Home currency <select id="currency"></select></label>
+        <p class="muted hint">Totals, budgets and bills are shown in your home currency. Transactions in other currencies are converted using the rates below.</p>
+        <div id="rates"></div>
+      </div>
+      <div class="card">
+        <h2>Bank sync server</h2>
+        <p class="muted hint">Automatic bank sync (US banks, via Plaid) needs your own sync server. See <b>SETUP-BANK-SYNC.md</b> in the project for the 15-minute setup. Your passcode is stored only on this device and is never included in backups.</p>
+        <form id="bank-config" class="form-row">
+          <input name="url" type="url" placeholder="https://lifeledger-sync.yourname.workers.dev" class="grow" autocomplete="off" />
+          <input name="passcode" type="password" placeholder="Passcode" autocomplete="current-password" />
+          <button type="submit" class="primary">Save &amp; test</button>
+          <button type="button" id="bank-forget">Disconnect</button>
+        </form>
       </div>
       <div class="card">
         <h2>Your data</h2>
@@ -225,5 +281,6 @@
 
   <div id="toast" class="toast" role="status"></div>
   <script src="app.js"></script>
+  <script src="bank.js"></script>
 </body>
 </html>

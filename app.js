@@ -11,7 +11,11 @@
     { v: 4, e: '🙂', l: 'Good' },
     { v: 5, e: '😄', l: 'Great' },
   ];
-  const DEFAULT_CATEGORIES = ['Groceries', 'Rent', 'Transport', 'Dining', 'Utilities', 'Health', 'Shopping', 'Entertainment', 'Salary', 'Other'];
+  const DEFAULT_CATEGORIES = ['Groceries', 'Rent', 'Transport', 'Dining', 'Utilities', 'Health', 'Shopping', 'Entertainment', 'Salary', 'Transfer', 'Other'];
+  // Transactions in this category (moving money between your own accounts, paying a
+  // credit card) are listed but left out of income/spending totals.
+  const TRANSFER = 'Transfer';
+  const CURRENCIES = ['USD', 'INR', 'EUR', 'GBP', 'JPY', 'CAD', 'AUD', 'SGD', 'AED', 'CHF', 'CNY', 'BRL'];
 
   // ---------- helpers ----------
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -25,13 +29,28 @@
   const fmtDay = (iso, opts = { month: 'short', day: 'numeric' }) => new Date(iso + 'T00:00:00').toLocaleDateString(undefined, opts);
   const today = () => isoDate();
 
-  function money(n) {
+  const home = () => state.settings.currency;
+  function money(n, currency = home()) {
     try {
-      return new Intl.NumberFormat(undefined, { style: 'currency', currency: state.settings.currency }).format(n);
+      return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(n);
     } catch {
-      return n.toFixed(2);
+      return `${Number(n).toFixed(2)} ${currency}`;
     }
   }
+
+  // Value of an amount in the home currency, or null when no exchange rate is set.
+  // settings.rates[c] = how much 1 unit of currency c is worth in the home currency.
+  function toHome(amount, currency) {
+    const c = currency || home();
+    if (c === home()) return amount;
+    const rate = Number(state.settings.rates?.[c]);
+    return rate > 0 ? amount * rate : null;
+  }
+  const countsInTotals = (t) => t.category !== TRANSFER;
+  // Currencies used by transactions that have no exchange rate yet.
+  const missingRates = () => [...new Set(state.transactions
+    .map((t) => t.currency || home())
+    .filter((c) => c !== home() && !(Number(state.settings.rates?.[c]) > 0)))];
 
   function toast(msg) {
     const t = $('#toast');
@@ -49,7 +68,9 @@
     habits: [],
     journal: [],
     recurring: [],
-    settings: { currency: 'USD' },
+    settings: { currency: 'USD', rates: {} },
+    categoryRules: {}, // learned: normalized description -> category
+    bank: { items: {} }, // item_id -> { institution, cursor, accounts, lastSync, error }
   });
 
   function load() {
@@ -65,15 +86,22 @@
   function normalize(data) {
     const base = emptyState();
     if (!data || typeof data !== 'object') return base;
-    return {
+    const out = {
       transactions: Array.isArray(data.transactions) ? data.transactions : [],
       budgets: data.budgets && typeof data.budgets === 'object' ? data.budgets : {},
       tasks: Array.isArray(data.tasks) ? data.tasks : [],
       habits: Array.isArray(data.habits) ? data.habits.map((h) => ({ ...h, log: h.log || {} })) : [],
       journal: Array.isArray(data.journal) ? data.journal : [],
       recurring: Array.isArray(data.recurring) ? data.recurring : [],
-      settings: { ...base.settings, ...(data.settings || {}) },
+      settings: { ...base.settings, ...(data.settings || {}), rates: { ...(data.settings?.rates || {}) } },
+      categoryRules: data.categoryRules && typeof data.categoryRules === 'object' ? data.categoryRules : {},
+      bank: { items: { ...(data.bank?.items || {}) } },
     };
+    // Older data had no per-item currency: it was all in the home currency of the time.
+    const cur = out.settings.currency;
+    for (const t of out.transactions) if (!t.currency) t.currency = cur;
+    for (const r of out.recurring) if (!r.currency) r.currency = cur;
+    return out;
   }
 
   let state = load();
@@ -110,7 +138,7 @@
 
   function recordFromRecurring(r, date) {
     state.transactions.push({
-      id: uid(), created: Date.now(), type: r.type, amount: r.amount,
+      id: uid(), created: Date.now(), type: r.type, amount: r.amount, currency: r.currency || home(),
       category: r.category, date, note: r.name, recurringId: r.id,
     });
   }
@@ -144,7 +172,7 @@
     return `<span class="tag">${esc(fmtDay(r.next))}</span>`;
   }
 
-  const signedAmount = (r) => `<span class="amt ${r.type}">${r.type === 'income' ? '+' : '−'}${esc(money(r.amount))}</span>`;
+  const signedAmount = (r) => `<span class="amt ${r.type}">${r.type === 'income' ? '+' : '−'}${esc(money(r.amount, r.currency))}</span>`;
 
   // ---------- derived data ----------
   const txInMonth = (month) => state.transactions.filter((t) => t.date.startsWith(month));
@@ -152,14 +180,19 @@
   function monthTotals(month) {
     let income = 0, expense = 0;
     for (const t of txInMonth(month)) {
-      if (t.type === 'income') income += t.amount; else expense += t.amount;
+      const v = countsInTotals(t) ? toHome(t.amount, t.currency) : null;
+      if (v == null) continue;
+      if (t.type === 'income') income += v; else expense += v;
     }
     return { income, expense, net: income - expense };
   }
 
   function spendByCategory(month) {
     const map = {};
-    for (const t of txInMonth(month)) if (t.type === 'expense') map[t.category] = (map[t.category] || 0) + t.amount;
+    for (const t of txInMonth(month)) {
+      const v = t.type === 'expense' && countsInTotals(t) ? toHome(t.amount, t.currency) : null;
+      if (v != null) map[t.category] = (map[t.category] || 0) + v;
+    }
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
   }
 
@@ -186,7 +219,34 @@
     renderJournal();
     renderRecurring();
     renderCategoryList();
-    $('#currency').value = state.settings.currency;
+    renderCurrencies();
+    for (const fn of renderHooks) fn();
+  }
+  const renderHooks = []; // extra renderers registered by bank.js
+
+  function rateWarning() {
+    const miss = missingRates();
+    return miss.length
+      ? `<p class="warn-note">Set an exchange rate for ${esc(miss.join(', '))} in Settings to include those transactions in totals.</p>`
+      : '';
+  }
+
+  function renderCurrencies() {
+    const sel = $('#currency');
+    if (sel.options.length !== CURRENCIES.length) sel.innerHTML = CURRENCIES.map((c) => `<option>${c}</option>`).join('');
+    sel.value = home();
+    const txCur = $('#tx-form').currency;
+    const seen = new Set([home(), ...CURRENCIES, ...state.transactions.map((t) => t.currency)]);
+    const keep = txCur.value;
+    txCur.innerHTML = [...seen].map((c) => `<option>${esc(c)}</option>`).join('');
+    txCur.value = keep && seen.has(keep) ? keep : home();
+    // Rates for every non-home currency that appears in your data.
+    const foreign = [...new Set([...state.transactions.map((t) => t.currency), ...Object.keys(state.settings.rates)])]
+      .filter((c) => c && c !== home()).sort();
+    $('#rates').innerHTML = foreign.length
+      ? foreign.map((c) => `<label class="inline rate-row">1 ${esc(c)} =
+          <input type="number" step="any" min="0" data-rate="${esc(c)}" value="${esc(state.settings.rates[c] ?? '')}" placeholder="rate" class="rate-input" /> ${esc(home())}</label>`).join('')
+      : '<p class="muted hint">Rates appear here once you have transactions in another currency.</p>';
   }
 
   function statHtml(label, value, cls = '') {
@@ -218,6 +278,7 @@
     const dueToday = openTasks.filter((t) => t.due && t.due <= today());
     const doneHabits = state.habits.filter((h) => h.log[today()]).length;
 
+    $('#dash-warn').innerHTML = rateWarning();
     $('#dash-stats').innerHTML =
       statHtml('Income this month', money(income), 'income') +
       statHtml('Spent this month', money(expense), 'expense') +
@@ -290,7 +351,8 @@
     for (let i = 13; i >= 0; i--) days.push(addDays(today(), -i));
     const byDay = Object.fromEntries(days.map((d) => [d, { in: 0, out: 0 }]));
     for (const t of state.transactions) {
-      if (byDay[t.date]) byDay[t.date][t.type === 'income' ? 'in' : 'out'] += t.amount;
+      const v = byDay[t.date] && countsInTotals(t) ? toHome(t.amount, t.currency) : null;
+      if (v != null) byDay[t.date][t.type === 'income' ? 'in' : 'out'] += v;
     }
     const moodByDay = Object.fromEntries(state.journal.map((j) => [j.date, j.mood]));
     const max = Math.max(1, ...days.flatMap((d) => [byDay[d].in, byDay[d].out]));
@@ -310,17 +372,18 @@
     if (!monthInput.value) monthInput.value = isoMonth();
     const month = monthInput.value;
     const { income, expense, net } = monthTotals(month);
+    $('#money-warn').innerHTML = rateWarning();
     $('#month-stats').innerHTML =
       statHtml('Income', money(income), 'income') +
       statHtml('Spent', money(expense), 'expense') +
       statHtml('Net', money(net), net >= 0 ? 'income' : 'expense');
 
     const txs = txInMonth(month).sort((a, b) => b.date.localeCompare(a.date) || (b.created || 0) - (a.created || 0));
-    $('#tx-body').innerHTML = txs.map((t) => `<tr>
+    $('#tx-body').innerHTML = txs.map((t) => `<tr class="${countsInTotals(t) ? '' : 'transfer'}">
         <td>${esc(fmtDay(t.date))}</td>
-        <td>${esc(t.category)}</td>
-        <td class="note">${esc(t.note)}</td>
-        <td class="num ${t.type}">${t.type === 'income' ? '+' : '−'}${esc(money(t.amount))}</td>
+        <td><button class="cat-btn" data-act="tx-cat" data-id="${t.id}" title="Change category">${esc(t.category)}</button></td>
+        <td class="note">${esc(t.note)}${t.account ? `<span class="sub">${esc(t.account)}</span>` : ''}</td>
+        <td class="num ${t.type}">${t.type === 'income' ? '+' : '−'}${esc(money(t.amount, t.currency))}</td>
         <td class="num"><button class="icon-btn" data-act="tx-del" data-id="${t.id}" aria-label="Delete">✕</button></td></tr>`).join('');
     $('#tx-empty').hidden = txs.length > 0;
 
@@ -415,6 +478,7 @@
     if (!(amount > 0)) return;
     state.transactions.push({
       id: uid(), created: Date.now(), type: f.type.value, amount: Math.round(amount * 100) / 100,
+      currency: f.currency.value || home(),
       category: f.category.value.trim() || 'Other', date: f.date.value || today(), note: f.note.value.trim(),
     });
     $('#tx-month').value = (f.date.value || today()).slice(0, 7);
@@ -448,7 +512,7 @@
     const r = {
       id: uid(), name, type: f.type.value, amount: Math.round(amount * 100) / 100,
       category: f.category.value.trim() || 'Other', frequency: f.frequency.value,
-      next, day: Number(next.slice(8, 10)), mode: f.mode.value, active: true,
+      next, day: Number(next.slice(8, 10)), mode: f.mode.value, active: true, currency: home(),
     };
     state.recurring.push(r);
     const added = processRecurring();
@@ -512,6 +576,17 @@
       case 'budget-del':
         delete state.budgets[el.dataset.cat];
         break;
+      case 'tx-cat': {
+        const t = state.transactions.find((x) => x.id === id);
+        if (!t) return;
+        const cat = prompt(`Category for "${t.note || t.category}" (use "${TRANSFER}" to leave it out of totals):`, t.category);
+        if (cat == null || !cat.trim()) return;
+        t.category = cat.trim();
+        t.categoryEdited = true;
+        // Remember the choice for future imported/synced transactions with this description.
+        if (t.source && t.note) state.categoryRules[ruleKey(t.note)] = t.category;
+        break;
+      }
       case 'rec-paid':
       case 'rec-skip': {
         const r = state.recurring.find((x) => x.id === id);
@@ -570,7 +645,28 @@
   });
 
   // ---------- settings / data ----------
-  $('#currency').addEventListener('change', (e) => { state.settings.currency = e.target.value; save(); });
+  // Changing home currency re-bases the stored exchange rates so they stay correct.
+  $('#currency').addEventListener('change', (e) => {
+    const oldHome = home(), newHome = e.target.value;
+    const rates = state.settings.rates;
+    const pivot = Number(rates[newHome]); // 1 newHome = pivot oldHome
+    const rebased = {};
+    if (pivot > 0) {
+      for (const [c, r] of Object.entries(rates)) if (c !== newHome && r > 0) rebased[c] = r / pivot;
+      rebased[oldHome] = 1 / pivot;
+    }
+    state.settings.rates = rebased;
+    state.settings.currency = newHome;
+    save();
+    if (!(pivot > 0) && state.transactions.some((t) => t.currency !== newHome)) toast(`Set exchange rates to ${newHome} below`);
+  });
+  $('#rates').addEventListener('change', (e) => {
+    const c = e.target.dataset.rate;
+    if (!c) return;
+    const v = parseFloat(e.target.value);
+    if (v > 0) state.settings.rates[c] = v; else delete state.settings.rates[c];
+    save();
+  });
 
   function download(name, content, type) {
     const a = document.createElement('a');
@@ -585,9 +681,9 @@
 
   $('#export-csv').addEventListener('click', () => {
     const q = (s) => `"${String(s ?? '').replace(/"/g, '""')}"`;
-    const rows = [['date', 'type', 'category', 'amount', 'note'].join(',')]
+    const rows = [['date', 'type', 'category', 'amount', 'currency', 'note', 'account'].join(',')]
       .concat([...state.transactions].sort((a, b) => a.date.localeCompare(b.date))
-        .map((t) => [t.date, t.type, q(t.category), t.amount.toFixed(2), q(t.note)].join(',')));
+        .map((t) => [t.date, t.type, q(t.category), t.amount.toFixed(2), t.currency || home(), q(t.note), q(t.account)].join(',')));
     download(`lifeledger-transactions-${today()}.csv`, rows.join('\n'), 'text/csv');
   });
 
@@ -625,7 +721,7 @@
     const s = emptyState();
     const d = (n) => addDays(today(), -n);
     const tx = (n, type, amount, category, note = '') =>
-      s.transactions.push({ id: uid(), created: Date.now() - n, type, amount, category, date: d(n), note });
+      s.transactions.push({ id: uid(), created: Date.now() - n, type, amount, currency: 'USD', category, date: d(n), note });
     tx(0, 'expense', 12.5, 'Dining', 'Lunch');
     tx(1, 'expense', 64.2, 'Groceries', 'Weekly shop');
     tx(2, 'expense', 3.2, 'Transport', 'Bus');
@@ -658,7 +754,7 @@
       { id: uid(), date: d(4), mood: 2, sleep: 5, note: 'Stressful meetings.' },
     ];
     const rec = (name, type, amount, category, frequency, next, mode) => {
-      const r = { id: uid(), name, type, amount, category, frequency, next, day: Number(next.slice(8, 10)), mode, active: true };
+      const r = { id: uid(), name, type, amount, category, frequency, next, day: Number(next.slice(8, 10)), mode, active: true, currency: 'USD' };
       s.recurring.push(r);
       return r;
     };
@@ -672,6 +768,59 @@
     rec('Car insurance', 'expense', 620, 'Transport', 'yearly', d(-40), 'remind');
     return s;
   }
+
+  // ---------- shared with bank.js ----------
+  // Normalize a bank description into a stable key: drop digits/refs, collapse spaces.
+  function ruleKey(desc) {
+    return String(desc).toUpperCase().replace(/[0-9]+/g, ' ').replace(/[^A-Z&]+/g, ' ').trim().split(' ').slice(0, 4).join(' ');
+  }
+  const KEYWORD_CATEGORIES = [
+    [/SWIGGY|ZOMATO|RESTAURANT|CAFE|STARBUCKS|MCDONALD|DOMINO|PIZZA|DOORDASH|GRUBHUB|UBER ?EATS|CHIPOTLE/, 'Dining'],
+    [/BIGBASKET|BLINKIT|ZEPTO|DMART|GROFERS|INSTAMART|RELIANCE ?FRESH|MORE ?RETAIL|WHOLE ?FOODS|TRADER ?JOE|KROGER|SAFEWAY|COSTCO|WALMART ?GROCERY|INSTACART/, 'Groceries'],
+    [/UBER|OLA|RAPIDO|IRCTC|FASTAG|METRO|PETROL|FUEL|SHELL|CHEVRON|EXXON|LYFT|PARKING/, 'Transport'],
+    [/AMAZON|FLIPKART|MYNTRA|AJIO|NYKAA|MEESHO|TARGET|EBAY|ETSY/, 'Shopping'],
+    [/NETFLIX|HOTSTAR|SPOTIFY|PRIME ?VIDEO|BOOKMYSHOW|YOUTUBE|HULU|DISNEY|STEAM/, 'Entertainment'],
+    [/SALARY|PAYROLL|SAL CREDIT|DIRECT ?DEP/, 'Salary'],
+    [/ELECTRICITY|BESCOM|MSEDCL|TATA ?POWER|ADANI ?ELEC|AIRTEL|JIO|VODAFONE|BSNL|BROADBAND|COMCAST|XFINITY|VERIZON|AT ?& ?T|T-?MOBILE|WATER ?BILL|GAS ?BILL|PG ?&E/, 'Utilities'],
+    [/\bRENT\b|NOBROKER/, 'Rent'],
+    [/PHARM|APOLLO|HOSPITAL|CLINIC|MEDPLUS|1MG|NETMEDS|CVS|WALGREENS|DENTAL/, 'Health'],
+    [/CREDIT ?CARD ?PAY|CC ?PAYMENT|CARD ?PAYMENT|SELF ?TRANSFER|OWN ?ACCOUNT|AUTOPAY.*CARD/, 'Transfer'],
+    [/ATM|CASH ?WDL|CASH ?WITHDRAWAL/, 'Cash'],
+  ];
+  // Best-guess category: your own past corrections first, then keyword rules.
+  function guessCategory(desc, fallback = 'Other') {
+    const learned = state.categoryRules[ruleKey(desc)];
+    if (learned) return learned;
+    const up = String(desc).toUpperCase();
+    for (const [re, cat] of KEYWORD_CATEGORIES) if (re.test(up)) return cat;
+    return fallback;
+  }
+
+  window.LifeLedger = {
+    get state() { return state; },
+    save, render, toast, money, esc, uid, today, fmtDay, home, guessCategory, ruleKey, toHome,
+    CURRENCIES, TRANSFER,
+    onRender(fn) { renderHooks.push(fn); },
+    // Insert or update transactions by id; returns { added, updated }.
+    upsertTransactions(list) {
+      const byId = new Map(state.transactions.map((t) => [t.id, t]));
+      let added = 0, updated = 0;
+      for (const t of list) {
+        const cur = byId.get(t.id);
+        if (!cur) { state.transactions.push(t); byId.set(t.id, t); added++; continue; }
+        const keepCat = cur.categoryEdited ? { category: cur.category, categoryEdited: true } : {};
+        Object.assign(cur, t, keepCat);
+        updated++;
+      }
+      return { added, updated };
+    },
+    removeTransactions(ids) {
+      const set = new Set(ids);
+      const before = state.transactions.length;
+      state.transactions = state.transactions.filter((t) => !set.has(t.id));
+      return before - state.transactions.length;
+    },
+  };
 
   // ---------- init ----------
   let shownDay = '';
