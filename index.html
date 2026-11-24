@@ -17,7 +17,7 @@
 
   <nav class="tabs" id="tabs">
     <button data-view="dashboard" class="active">Dashboard</button>
-    <button data-view="money">Money</button>
+    <button data-view="money">Money <span class="badge" id="money-badge" hidden></span></button>
     <button data-view="tasks">Tasks</button>
     <button data-view="habits">Habits</button>
     <button data-view="journal">Journal</button>
@@ -29,6 +29,10 @@
     <section id="view-dashboard" class="view active">
       <div class="stats" id="dash-stats"></div>
       <div class="grid">
+        <div class="card wide" id="dash-bills-card">
+          <h2>Bills due <small class="muted">next 3 days &amp; overdue</small></h2>
+          <ul class="list rec" id="dash-bills"></ul>
+        </div>
         <div class="card">
           <h2>Spending by category <small class="muted">this month</small></h2>
           <div id="dash-categories"></div>
@@ -68,6 +72,38 @@
           <button type="submit" class="primary">Add</button>
         </form>
         <datalist id="category-list"></datalist>
+      </div>
+
+      <div class="card">
+        <h2>Recurring &amp; bills</h2>
+        <form id="rec-form">
+          <div class="form-row">
+            <input name="name" placeholder="Name (e.g. Rent, Netflix, Salary)" required class="grow" />
+            <input name="amount" type="number" step="0.01" min="0.01" placeholder="Amount" required />
+            <input name="category" list="category-list" placeholder="Category" required />
+          </div>
+          <div class="form-row">
+            <select name="type" aria-label="Type">
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+            </select>
+            <select name="frequency" aria-label="Repeats">
+              <option value="monthly">Monthly</option>
+              <option value="weekly">Weekly</option>
+              <option value="yearly">Yearly</option>
+              <option value="once">One time</option>
+            </select>
+            <label class="inline">Next due <input name="next" type="date" required /></label>
+            <select name="mode" aria-label="Mode">
+              <option value="remind">Remind me to pay</option>
+              <option value="auto">Add automatically</option>
+            </select>
+            <button type="submit" class="primary">Add</button>
+          </div>
+        </form>
+        <p class="muted hint">“Remind me” shows the bill on your Dashboard 3 days before it's due; tap <b>Paid</b> to record it. “Add automatically” records the transaction on its due date.</p>
+        <ul class="list rec" id="rec-list"></ul>
+        <p class="empty" id="rec-empty">No recurring items yet.</p>
       </div>
 
       <div class="card">

@@ -6,6 +6,9 @@ A personal dashboard for monitoring your finances and day-to-day activities. Pla
 
 - **Dashboard**: this month's income, spending and net; spending by category; budget progress; today's tasks and habits; and a 14-day income/spending chart with your daily mood.
 - **Money**: log income and expenses with categories and notes, browse by month, and set monthly budgets per category (the bar turns amber above 80% and red when you go over).
+- **Recurring & bills**: set up repeating income or expenses (weekly, monthly, yearly or one time).
+  - **Add automatically**: salary, rent and subscriptions are entered as transactions on their due date. Any payments that came due while the app was closed are filled in when you next open it.
+  - **Remind me to pay**: bills appear on the Dashboard 3 days before they're due and turn red when overdue, and the Money tab shows a count of bills due. Tap **Paid** to record the payment and move the bill to its next due date, or **Skip** to move on without recording anything.
 - **Tasks**: to-dos with due dates and priorities. You can filter by open, due today/overdue, completed or all.
 - **Habits**: daily habits with a 7-day check grid and streak counter.
 - **Journal**: one entry per day with mood, hours of sleep and notes.

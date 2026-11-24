@@ -156,3 +156,21 @@ input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--primary); 
   opacity: 0; transition: .25s; pointer-events: none; max-width: calc(100% - 32px);
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* Recurring & bills */
+.badge {
+  display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 2px;
+  border-radius: 999px; background: var(--expense); color: #fff;
+  font-size: .72rem; line-height: 18px; text-align: center; font-weight: 600;
+}
+.hint { font-size: .85rem; margin: 4px 0 8px; }
+.tag.soon { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.tag.overdue { background: color-mix(in srgb, var(--expense) 16%, transparent); }
+.sub { display: block; font-size: .8rem; color: var(--muted); }
+.amt { font-variant-numeric: tabular-nums; white-space: nowrap; }
+button.small { padding: 4px 10px; font-size: .85rem; }
+.list li.paused .title, .list li.paused .amt { opacity: .5; }
+/* Bill rows: name + amount on the first line; due tag and buttons wrap below on narrow screens. */
+.list.rec li { flex-wrap: wrap; row-gap: 6px; }
+.list.rec .title { flex: 1 1 150px; }
+.list.rec .actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }

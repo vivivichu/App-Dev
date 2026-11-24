@@ -48,6 +48,7 @@
     tasks: [],
     habits: [],
     journal: [],
+    recurring: [],
     settings: { currency: 'USD' },
   });
 
@@ -70,6 +71,7 @@
       tasks: Array.isArray(data.tasks) ? data.tasks : [],
       habits: Array.isArray(data.habits) ? data.habits.map((h) => ({ ...h, log: h.log || {} })) : [],
       journal: Array.isArray(data.journal) ? data.journal : [],
+      recurring: Array.isArray(data.recurring) ? data.recurring : [],
       settings: { ...base.settings, ...(data.settings || {}) },
     };
   }
@@ -86,6 +88,63 @@
     }
     render();
   }
+
+  // ---------- recurring & bills ----------
+  // A recurring item is { id, name, type, amount, category, frequency, next, day, mode, active, done }.
+  // mode 'auto' posts a transaction on each due date; mode 'remind' waits for the user to mark it paid.
+  const FREQ_LABEL = { weekly: 'Weekly', monthly: 'Monthly', yearly: 'Yearly', once: 'One time' };
+  const REMIND_DAYS = 3;
+  const daysUntil = (iso) => Math.round((new Date(iso + 'T00:00:00') - new Date(today() + 'T00:00:00')) / 86400000);
+
+  // Move an item to its next due date. Monthly/yearly keep the original day of month,
+  // clamped to the month's length (e.g. the 31st becomes Feb 28, then back to Mar 31).
+  function advance(r) {
+    if (r.frequency === 'once') { r.active = false; r.done = true; return; }
+    if (r.frequency === 'weekly') { r.next = addDays(r.next, 7); return; }
+    const d = new Date(r.next + 'T00:00:00');
+    const target = new Date(d.getFullYear() + (r.frequency === 'yearly' ? 1 : 0), d.getMonth() + (r.frequency === 'monthly' ? 1 : 0), 1);
+    const daysInMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    target.setDate(Math.min(r.day || d.getDate(), daysInMonth));
+    r.next = isoDate(target);
+  }
+
+  function recordFromRecurring(r, date) {
+    state.transactions.push({
+      id: uid(), created: Date.now(), type: r.type, amount: r.amount,
+      category: r.category, date, note: r.name, recurringId: r.id,
+    });
+  }
+
+  // Post every auto item that has come due (including any missed while the app was closed).
+  function processRecurring() {
+    let added = 0;
+    for (const r of state.recurring) {
+      let guard = 0;
+      while (r.mode === 'auto' && r.active && r.next <= today() && guard++ < 500) {
+        recordFromRecurring(r, r.next);
+        advance(r);
+        added++;
+      }
+    }
+    return added;
+  }
+
+  const billsDue = () => state.recurring
+    .filter((r) => r.mode === 'remind' && r.active && daysUntil(r.next) <= REMIND_DAYS)
+    .sort((a, b) => a.next.localeCompare(b.next));
+
+  function dueTag(r) {
+    if (r.done) return '<span class="tag">Done</span>';
+    if (!r.active) return '<span class="tag">Paused</span>';
+    const n = daysUntil(r.next);
+    if (n < 0) return `<span class="tag overdue">Overdue · ${esc(fmtDay(r.next))}</span>`;
+    if (n === 0) return '<span class="tag soon">Due today</span>';
+    if (n === 1) return '<span class="tag soon">Tomorrow</span>';
+    if (n <= REMIND_DAYS) return `<span class="tag soon">In ${n} days</span>`;
+    return `<span class="tag">${esc(fmtDay(r.next))}</span>`;
+  }
+
+  const signedAmount = (r) => `<span class="amt ${r.type}">${r.type === 'income' ? '+' : '−'}${esc(money(r.amount))}</span>`;
 
   // ---------- derived data ----------
   const txInMonth = (month) => state.transactions.filter((t) => t.date.startsWith(month));
@@ -125,6 +184,7 @@
     renderTasks();
     renderHabits();
     renderJournal();
+    renderRecurring();
     renderCategoryList();
     $('#currency').value = state.settings.currency;
   }
@@ -187,6 +247,42 @@
       : '<li><span class="title muted">Add habits on the Habits tab.</span></li>';
 
     renderTrend();
+  }
+
+  function renderRecurring() {
+    // Dashboard: bills needing attention.
+    const due = billsDue();
+    const hasBills = state.recurring.some((r) => r.mode === 'remind' && r.active);
+    $('#dash-bills').innerHTML = due.length
+      ? due.map((r) => `<li>
+          <span class="title">${esc(r.name)}<span class="sub">${esc(r.category)}</span></span>
+          ${signedAmount(r)}
+          <span class="actions">${dueTag(r)}
+          <button class="small primary" data-act="rec-paid" data-id="${r.id}">Paid</button>
+          <button class="small" data-act="rec-skip" data-id="${r.id}" title="Skip this one without recording a payment">Skip</button></span></li>`).join('')
+      : `<li><span class="title muted">${hasBills ? 'Nothing due in the next few days ✅' : 'Add bills under Money → Recurring & bills.'}</span></li>`;
+
+    // Badge on the Money tab (and the home-screen icon where supported).
+    const badge = $('#money-badge');
+    badge.textContent = due.length;
+    badge.hidden = due.length === 0;
+    try {
+      if (due.length && navigator.setAppBadge) navigator.setAppBadge(due.length).catch(() => {});
+      else if (navigator.clearAppBadge) navigator.clearAppBadge().catch(() => {});
+    } catch {}
+
+    // Money tab: full list.
+    const items = [...state.recurring].sort((a, b) =>
+      (b.active - a.active) || a.next.localeCompare(b.next));
+    $('#rec-list').innerHTML = items.map((r) => `<li class="${r.active ? '' : 'paused'}">
+        <span class="title">${esc(r.name)}
+          <span class="sub">${esc(FREQ_LABEL[r.frequency] || r.frequency)} · ${r.mode === 'auto' ? 'Auto-added' : 'Reminder'} · ${esc(r.category)}</span></span>
+        ${signedAmount(r)}
+        <span class="actions">${dueTag(r)}
+        ${r.active && r.mode === 'remind' ? `<button class="small" data-act="rec-paid" data-id="${r.id}">Paid</button>` : ''}
+        ${r.done ? '' : `<button class="icon-btn" data-act="rec-pause" data-id="${r.id}" aria-label="${r.active ? 'Pause' : 'Resume'}" title="${r.active ? 'Pause' : 'Resume'}">${r.active ? '⏸' : '▶'}</button>`}
+        <button class="icon-btn" data-act="rec-del" data-id="${r.id}" aria-label="Delete">✕</button></span></li>`).join('');
+    $('#rec-empty').hidden = items.length > 0;
   }
 
   function renderTrend() {
@@ -342,6 +438,25 @@
     toast(`Budget set for ${cat}`);
   });
 
+  $('#rec-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const amount = parseFloat(f.amount.value);
+    const name = f.name.value.trim();
+    if (!name || !(amount > 0)) return;
+    const next = f.next.value || today();
+    const r = {
+      id: uid(), name, type: f.type.value, amount: Math.round(amount * 100) / 100,
+      category: f.category.value.trim() || 'Other', frequency: f.frequency.value,
+      next, day: Number(next.slice(8, 10)), mode: f.mode.value, active: true,
+    };
+    state.recurring.push(r);
+    const added = processRecurring();
+    f.name.value = ''; f.amount.value = ''; f.category.value = '';
+    save();
+    toast(added ? `Added — ${added} past transaction${added > 1 ? 's' : ''} recorded` : `${name} added`);
+  });
+
   $('#task-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const f = e.target;
@@ -396,6 +511,30 @@
         break;
       case 'budget-del':
         delete state.budgets[el.dataset.cat];
+        break;
+      case 'rec-paid':
+      case 'rec-skip': {
+        const r = state.recurring.find((x) => x.id === id);
+        if (!r || !r.active) return;
+        if (act === 'rec-paid') recordFromRecurring(r, today());
+        advance(r);
+        save();
+        toast(act === 'rec-paid'
+          ? `${r.name} recorded${r.active ? ` · next due ${fmtDay(r.next)}` : ''}`
+          : `${r.name} skipped${r.active ? ` · next due ${fmtDay(r.next)}` : ''}`);
+        return;
+      }
+      case 'rec-pause': {
+        const r = state.recurring.find((x) => x.id === id);
+        if (!r || r.done) return;
+        r.active = !r.active;
+        // On resume, jump past dates missed while paused instead of back-filling them.
+        if (r.active) { let g = 0; while (r.next < today() && g++ < 500) advance(r); }
+        break;
+      }
+      case 'rec-del':
+        if (!confirm('Delete this recurring item? Transactions already recorded are kept.')) return;
+        state.recurring = state.recurring.filter((r) => r.id !== id);
         break;
       case 'task-toggle': {
         const t = state.tasks.find((x) => x.id === id);
@@ -518,18 +657,52 @@
       { id: uid(), date: d(3), mood: 5, sleep: 8, note: 'Great run in the morning!' },
       { id: uid(), date: d(4), mood: 2, sleep: 5, note: 'Stressful meetings.' },
     ];
+    const rec = (name, type, amount, category, frequency, next, mode) => {
+      const r = { id: uid(), name, type, amount, category, frequency, next, day: Number(next.slice(8, 10)), mode, active: true };
+      s.recurring.push(r);
+      return r;
+    };
+    // Salary and rent were paid 12 days ago (see transactions above); next occurrence is a month on.
+    advance(rec('Salary', 'income', 3200, 'Salary', 'monthly', d(12), 'auto'));
+    advance(rec('Rent', 'expense', 1200, 'Rent', 'monthly', d(12), 'auto'));
+    rec('Credit card', 'expense', 340, 'Other', 'monthly', d(0), 'remind');
+    rec('Phone bill', 'expense', 35, 'Utilities', 'monthly', d(-2), 'remind');
+    rec('Electricity', 'expense', 48, 'Utilities', 'monthly', d(1), 'remind');
+    rec('Netflix', 'expense', 15.49, 'Entertainment', 'monthly', d(-9), 'remind');
+    rec('Car insurance', 'expense', 620, 'Transport', 'yearly', d(-40), 'remind');
     return s;
   }
 
   // ---------- init ----------
-  $('#today-label').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  $('#tx-form').date.value = today();
-  loadJournalForm(today());
+  let shownDay = '';
+  // Runs on launch and whenever the app comes back to the foreground — an installed
+  // iPhone app can stay suspended in memory for days, so recheck what's due.
+  function refreshForToday() {
+    const day = today();
+    if (day !== shownDay) {
+      $('#today-label').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
+      $('#tx-form').date.value = day;
+      $('#rec-form').next.value = day;
+      if (!shownDay) loadJournalForm(day);
+      shownDay = day;
+    }
+    const added = processRecurring();
+    if (added) {
+      save();
+      toast(`${added} recurring transaction${added > 1 ? 's' : ''} added`);
+    } else {
+      render();
+    }
+  }
+
   try {
     const tab = localStorage.getItem(STORAGE_KEY + ':tab');
     if (tab) $(`#tabs button[data-view="${tab}"]`)?.click();
   } catch {}
-  render();
+  refreshForToday();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshForToday();
+  });
 
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

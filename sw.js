@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve network-first so updates show up.
-const CACHE = 'lifeledger-v1';
+const CACHE = 'lifeledger-v2';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './manifest.json', './icon.svg'];
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)));
