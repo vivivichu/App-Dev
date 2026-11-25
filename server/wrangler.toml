@@ -1,6 +1,6 @@
 # Cloudflare Worker config for the LifeLedger bank sync server.
 # Setup steps: see ../SETUP-BANK-SYNC.md
-name = "lifeledger-sync"
+name = "app-dev"
 main = "src/index.js"
 compatibility_date = "2025-01-01"
 
