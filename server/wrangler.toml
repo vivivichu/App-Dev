@@ -12,7 +12,7 @@ ALLOWED_ORIGINS = "https://vivivichu.github.io"
 # Created with: npx wrangler kv namespace create ITEMS  — paste the id it prints here.
 [[kv_namespaces]]
 binding = "ITEMS"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "4bed4e8e84a94e0fb4a3e51c01efaf09"
 
 # Secrets (never put these in this file):
 #   npx wrangler secret put PLAID_CLIENT_ID
